@@ -87,16 +87,16 @@ trunc_pareto_tail <- function(v, xmin, xmax, alpha) {
 
 
 # Define probability functions for Cramer-von-Mises. Already plug in parameters
-F_exp <- function(z){
+F_exp <- function(z, lambda){
   return(1 - exp(-lambda * z))
 }
 
-F_pareto <- function(z){
+F_pareto <- function(z, xmin, alpha){
   y <- ifelse(z > xmin, 1 - (xmin / z) ** alpha, 0)
   return(y)
 }
 
-F_pareto_trunc <- function(z){
+F_pareto_trunc <- function(z, xmin, xmax, alpha_truncated){
   c <- 1 / ((xmin ** alpha_truncated) * (xmin ** (-alpha_truncated) - xmax ** (-alpha_truncated)))
   y <- ifelse(z > xmin & z < xmax, c * (1 - (xmin / z) ** alpha_truncated), ifelse(z < xmin, 0, 1))
   return(y)
@@ -148,15 +148,13 @@ ggplot(plot_data) + geom_point(aes(x = x_log, y = y_log, color = Distribution), 
 
 ##### Exponential
 set.seed(42)
-cvm.test(pull(data, steps), null = 'F_exp', estimated = FALSE)
+cvm.test(pull(data, steps), null = "F_exp", lambda = lambda, estimated = FALSE)
 
 ##### Pareto
-set.seed(42)
-cvm.test(pull(data, steps), null = 'F_pareto', estimated = FALSE)
+cvm.test(pull(data, steps), null = 'F_pareto', xmin = xmin, alpha = alpha, estimated = FALSE)
 
 ##### Truncated Pareto
-set.seed(42)
-cvm.test(pull(data, steps), null = 'F_pareto_trunc', estimated = FALSE)
+cvm.test(pull(data, steps), null = 'F_pareto_trunc', xmin = xmin, xmax = xmax, alpha_truncated = alpha_truncated, estimated = FALSE)
 
 
 ## Tail data
@@ -222,17 +220,16 @@ ggplot(plot_data) + geom_point(aes(x = x_log, y = y_log, color = Distribution), 
 ### These are not correct!!! Have to redefine the values, or even better, make distributions flexible.
 
 #### Exponential
-set.seed(42)
-cvm.test(pull(truncated_data, steps), null = 'F_exp', estimated = FALSE)
+cvm.test(pull(truncated_data, steps), null = 'F_exp', lambda = lambda, estimated = FALSE)
 
 ##### Pareto
 set.seed(42)
-cvm.test(pull(truncated_data, steps), null = 'F_pareto', estimated = FALSE)
+cvm.test(pull(truncated_data, steps), null = 'F_pareto', xmin  = xmin, alpha = alpha, estimated = FALSE)
 
 
 ##### Truncated pareto
 set.seed(42)
-cvm.test(pull(truncated_data, steps), null = 'F_pareto_trunc', estimated = FALSE)
+cvm.test(pull(truncated_data, steps), null = 'F_pareto_trunc', xmin = xmin, xmax = xmax, alpha_truncated = alpha_truncated, estimated = FALSE)
 
 
 
@@ -299,17 +296,14 @@ alpha_truncated
 Test Goodness of fit.
 
 #### Exponential
-set.seed(42)
-cvm.test(pull(haulout_data, steps), null = 'F_exp', estimated = FALSE)
+cvm.test(pull(haulout_data, steps), null = 'F_exp', lambda = lambda, estimated = FALSE)
 
 ##### Pareto
-set.seed(42)
-cvm.test(pull(haulout_data, steps), null = 'F_pareto', estimated = FALSE)
+cvm.test(pull(haulout_data, steps), null = 'F_pareto', xmin = xmin, alpha = alpha, estimated = FALSE)
 
 
 ##### Truncated pareto
-set.seed(42)
-cvm.test(pull(haulout_data, steps), null = 'F_pareto_trunc', estimated = FALSE)
+cvm.test(pull(haulout_data, steps), null = 'F_pareto_trunc', xmin = xmin, xmax = xmax, alpha_truncated = alpha_truncated, estimated = FALSE)
 
 
 The underlying probability measure generating the haulout data is assumed to not be any of the ones considered.
