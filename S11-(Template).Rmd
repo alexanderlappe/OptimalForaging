@@ -1,0 +1,424 @@
+---
+output: html_notebook
+---
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+options(warn=-1)
+library(pracma)
+library(tidyverse)
+library(readxl)
+library(EnvStats)
+library(EstimationTools)
+library(maps)
+library(goftest)
+library(magrittr)
+library(geosphere)
+library(evd)
+```
+
+## Analysis of entire data set
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+data <- read_excel("/Users/alex/Documents/Uni/LevyFlight/Seehund S11 S12 S13 S14 .xlsx", col_names = c('Id', "Date", "x1", "x2", "lat", "lon", "V_MASK"), sheet = "S11")
+
+
+data <- mutate(data, lon_minus  = lag(lon), lat_minus = lag(lat)) %>%
+  mutate(steps = distHaversine(bind_cols(lon, lat), bind_cols(lon_minus, lat_minus), r=6378137)) %>%
+  select(-c(lon_minus, lat_minus, x1, x2))
+
+data <- filter(data, V_MASK == 0 & steps > 0 & is.na(steps) == FALSE)
+
+# Set truncation point
+truncation = 400
+```
+
+
+```{r echo=FALSE, warning=FALSE}
+summary(data)
+head(arrange(data, desc(steps)))
+```
+
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ggplot(data, aes(lon,lat)) + geom_point(size=0.5) + geom_path(size=0.5) + coord_fixed(ratio = 1, xlim = NULL, ylim = NULL, expand = TRUE, clip = "on") +
+  theme_bw() + ggtitle('Path') + xlab('Longitude') + ylab('Latitude')
+options(warn=0)
+```
+
+```{r echo=FALSE}
+ggplot(data) + geom_histogram(aes(x = steps), binwidth = 100) + theme_bw() + ggtitle("Histogram of step length") + xlab("Step Length") + ylab("Frequency")
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# Defining tail probability functions for plots
+get_tail <- function(v) {
+  x <- linspace(0, max(v, na.rm=T), n = 100)
+  y <- rep(0,100)
+  for (i in 1:100) {
+    y[i] <- length(v[v > x[i]]) / length(v)
+  }
+  return(y)
+}
+
+exp_tail <- function(v, lambda) {
+  x <- linspace(0, max(v, na.rm=T), n = 100)
+  y <- rep(0,100)
+  for (i in 1:100) {
+    y[i] <- exp(-lambda * x[i])
+  }
+  return(y)
+}
+
+pareto_tail <- function(v, xmin, alpha) {
+  x <- linspace(0, max(v, na.rm=T), n = 100)
+  y <- rep(0,100)
+  for (i in 1:100) {
+    y[i] <- ifelse(x[i] > xmin, (xmin / x[i]) ** alpha, 1)
+  }
+  return(y)
+}
+
+
+trunc_pareto_tail <- function(v, xmin, xmax, alpha) {
+  x <- linspace(0, max(v, na.rm=T), n = 100)
+  y <- rep(0,100)
+  c <- 1 / ((xmin ** alpha_truncated) * (xmin ** (-alpha_truncated) - xmax ** (-alpha_truncated)))
+  for (i in 1:100) {
+    y[i] <- ifelse(x[i] < xmin, 1, 1 - c * (1 - (xmin / x[i]) ** alpha_truncated))
+    if (x[i] > xmax) {
+      y[i] = 0
+    }
+    
+  }
+  return(y)
+}
+```
+
+```{r echo=FALSE}
+# Define probability functions for Cramer-von-Mises. Already plug in parameters
+F_exp <- function(z){
+  return(1 - exp(-lambda * z))
+}
+
+F_pareto <- function(z){
+  y <- ifelse(z > xmin, 1 - (xmin / z) ** alpha, 0)
+  return(y)
+}
+
+F_pareto_trunc <- function(z){
+  c <- 1 / ((xmin ** alpha_truncated) * (xmin ** (-alpha_truncated) - xmax ** (-alpha_truncated)))
+  y <- ifelse(z > xmin & z < xmax, c * (1 - (xmin / z) ** alpha_truncated), ifelse(z < xmin, 0, 1))
+  return(y)
+}
+```
+
+
+### Maximum Likelihood fits for entire dataset
+##### Pareto
+
+```{r echo=FALSE}
+fit_pareto <- epareto(pull(data, steps), method = "mle", plot.pos.con = 0.575)
+fit_pareto
+xmin <- fit_pareto$parameters[1]
+alpha <- fit_pareto$parameters[2]
+```
+
+##### Exponential
+
+```{r echo=FALSE}
+lambda <- length(pull(data, steps)) / sum(pull(data, steps), na.rm = T)
+print(lambda)
+options(warn=0)
+```
+
+##### Truncated pareto
+```{r echo=FALSE, warning=FALSE}
+xmax = max(pull(data, steps))
+LogLikelihood <- function(mu) return(length(pull(data, steps)) * log(mu / (xmin**(-mu)-xmax**(-mu))) - (mu+1)*sum(log(pull(data, steps))))
+
+mu_hat <- optimize(LogLikelihood, c(0,4), maximum = T)
+alpha_truncated <- mu_hat$maximum
+alpha_truncated
+```
+
+
+### Plots
+
+```{r echo=FALSE}
+# Make tibble containing all tails needed for plot. Note how grouping is abused as opposed to using seperate columns.
+
+# Make plot plata
+plot_data <- tibble(x_val = rep(linspace(0, max(select(data, steps), na.rm=T), n = 100), 4)) %>% 
+  mutate(y_val = c(get_tail(pull(data, steps)), exp_tail(x_val, lambda), pareto_tail(x_val, xmin, alpha), trunc_pareto_tail(x_val, xmin, xmax, alpha_truncated)), Distribution = c(rep('Data', 100), rep('Exponential', 100), rep('Pareto', 100), rep('Truncated Pareto', 100))) %>% 
+  mutate(x_log = log10(x_val), y_log = log10(y_val))
+
+# Tail plot
+ggplot(plot_data) + geom_point(aes(x = x_val, y = y_val, color = Distribution), size = 0.5) + theme_bw() + ggtitle("Tail plot") + xlab("Steps") + ylab("(Theoretical) proportion of steps larger than c")
+      
+# log-log plot
+ggplot(plot_data) + geom_point(aes(x = x_log, y = y_log, color = Distribution), size = 0.5) + theme_bw()  +  coord_cartesian(ylim = c(-7.5,0)) +
+  ggtitle("log-log tail plot") + xlab("Steps") + ylab("(Theoretical) proportion of steps larger than c")
+```
+
+
+### Cramer-von-Mises Test for goodness of fit.
+
+
+##### Exponential
+```{r echo=FALSE}
+set.seed(42)
+cvm.test(pull(data, steps), null = 'F_exp', estimated = FALSE)
+```
+
+##### Pareto
+```{r echo=FALSE}
+set.seed(42)
+cvm.test(pull(data, steps), null = 'F_pareto', estimated = FALSE)
+```
+
+##### Truncated Pareto
+```{r echo=FALSE}
+set.seed(42)
+cvm.test(pull(data, steps), null = 'F_pareto_trunc', estimated = FALSE)
+```
+
+
+## Tail data
+Last 400 values 
+
+```{r echo=FALSE}
+truncated_data <- slice(arrange(data, desc(steps)), c(1:truncation))
+non_truncated_data <- slice(arrange(data, desc(steps)), c(truncation + 1:length(data$steps)))
+```
+
+### Histogram of data that is taken out(small values)
+```{r echo=FALSE}
+ggplot(non_truncated_data) + geom_histogram(aes(x = steps), binwidth = 100) + theme_bw() + ggtitle("Histogram of step length") + xlab("Step Length") + ylab("Frequency")
+```
+
+### Histogram of tail data
+```{r echo=FALSE, warning=FALSE}
+ggplot(truncated_data) + geom_histogram(aes(x = steps), binwidth = 100) + theme_bw() + ggtitle("Histogram of step length") + xlab("Step Length") + ylab("Frequency")
+```
+
+
+### Maximum Likelihood fits for tail data
+##### Pareto
+
+
+```{r echo=FALSE}
+fit_pareto <- epareto(pull(truncated_data, steps), method = "mle", plot.pos.con = 0.575)
+fit_pareto
+xmin <- fit_pareto$parameters[1]
+alpha <- fit_pareto$parameters[2]
+xmax <- max(select(truncated_data, steps))
+alpha
+```
+
+##### Exponential
+
+```{r echo=FALSE}
+lambda <- length(pull(truncated_data, steps)) / sum(pull(truncated_data, steps), na.rm = T)
+print(lambda)
+options(warn=0)
+```
+
+##### Truncated pareto
+```{r echo=FALSE, warning=FALSE}
+xmax = max(pull(truncated_data, steps))
+LogLikelihood <- function(mu) return(length(pull(truncated_data, steps)) * log(mu / (xmin**(-mu)-xmax**(-mu))) - (mu+1)*sum(log(pull(truncated_data, steps))))
+
+mu_hat <- optimize(LogLikelihood, c(0,4), maximum = T)
+alpha_truncated <- mu_hat$maximum
+alpha_truncated
+```
+
+### Plots
+
+```{r echo=FALSE}
+# Make tibble containing all tails needed for plot. Note how grouping is abused as opposed to using seperate columns.
+
+# Make plot data
+plot_data <- 
+  tibble(x_val = rep(linspace(0, max(select(truncated_data, steps), na.rm=T), n = 100), 4)) %>% 
+  mutate(y_val = c(get_tail(pull(truncated_data, steps)), exp_tail(x_val, lambda), pareto_tail(x_val, xmin, alpha), trunc_pareto_tail(x_val, xmin, max(select(truncated_data, steps)), alpha)), Distribution = c(rep('Data', 100), rep('Exponential', 100), rep('Pareto', 100), rep('Truncated Pareto', 100))) %>% 
+  mutate(x_log = log10(x_val), y_log = log10(y_val))
+
+# Tail plot
+ggplot(plot_data) + geom_point(aes(x = x_val, y = y_val, color = Distribution), size = 0.5) + theme_bw() + ggtitle("Tail plot") + xlab("Steps") + ylab("(Theoretical) proportion of steps larger than c")
+      
+# Log-log plot
+ggplot(plot_data) + geom_point(aes(x = x_log, y = y_log, color = Distribution), size = 0.5) + theme_bw() +
+  ggtitle("log-log tail plot") + xlab("Steps") + ylab("(Theoretical) proportion of steps larger than c") +
+  coord_cartesian(ylim = c(-7.5,0))
+
+```
+
+### Cramer-von-Mises Test for goodness of fit.
+
+
+
+
+#### Exponential
+```{r echo=FALSE}
+set.seed(42)
+cvm.test(pull(truncated_data, steps), null = 'F_exp', estimated = FALSE)
+```
+
+##### Pareto
+```{r echo=FALSE}
+set.seed(42)
+cvm.test(pull(truncated_data, steps), null = 'F_pareto', estimated = FALSE)
+```
+
+##### Truncated pareto
+```{r echo=FALSE}
+set.seed(42)
+cvm.test(pull(truncated_data, steps), null = 'F_pareto_trunc', estimated = FALSE)
+```
+
+
+## Haulout corrected data
+Show code to doublecheck.
+```{r message=FALSE, warning=FALSE}
+haul_out <- read_excel("/Users/alex/Documents/Uni/LevyFlight/Haul-outs.xlsx", col_names = c('Seal', "Start", "End", "Haulout", "number", "lat", "lon")) %>% 
+  filter(Seal == "S11") %>% 
+  select(-c(Start, End, number))
+```
+
+The haulout spots.
+
+```{r message=FALSE, warning=FALSE}
+haul_out
+```
+
+For each step, calculate the minimum of the distances between the start point and all haulout spots.
+
+
+```{r message=FALSE, warning=FALSE}
+haulout_data <- data
+haulout_lons <- haul_out %>% pull(lon) %>% as.numeric()
+haulout_lats <- haul_out %>% pull(lat) %>% as.numeric()
+dist_min <- rep(0, data %>% pull(steps) %>% length())
+for (i in 1:length(data %>% pull(steps))){
+  dist_min[i] <- distHaversine(c(data$lon[i], data$lat[i]), bind_cols(haulout_lons, haulout_lats), r = 6378137) %>% min()
+}
+```
+
+```{r message=FALSE, warning=FALSE}
+haulout_data <- haulout_data %>% 
+  mutate(dist_min = dist_min)
+haulout_data
+```
+Filter out small distances. Taking 11000 as lower bound leaves the dataset about as large as in the "tail case".
+
+```{r message=FALSE, warning=FALSE}
+haulout_data %>% 
+  filter(dist_min > 11000)
+```
+
+```{r}
+hist(haulout_data %>% 
+  pull(steps))
+```
+
+
+## ML Estimates
+
+```{r message=FALSE, warning=FALSE}
+fit_pareto <- epareto(pull(haulout_data, steps), method = "mle", plot.pos.con = 0.575)
+fit_pareto
+xmin <- fit_pareto$parameters[1]
+alpha <- fit_pareto$parameters[2]
+xmax <- max(select(truncated_data, steps))
+alpha
+```
+
+##### Exponential
+
+```{r echo=FALSE}
+lambda <- length(pull(haulout_data, steps)) / sum(pull(haulout_data, steps), na.rm = T)
+print(lambda)
+options(warn=0)
+```
+
+##### Truncated pareto
+```{r echo=FALSE, warning=FALSE}
+xmax = max(pull(haulout_data, steps))
+LogLikelihood <- function(mu) return(length(pull(haulout_data, steps)) * log(mu / (xmin**(-mu)-xmax**(-mu))) - (mu+1)*sum(log(pull(haulout_data, steps))))
+
+mu_hat <- optimize(LogLikelihood, c(0,4), maximum = T)
+alpha_truncated <- mu_hat$maximum
+alpha_truncated
+```
+
+
+Test Goodness of fit.
+
+#### Exponential
+```{r echo=FALSE}
+set.seed(42)
+cvm.test(pull(haulout_data, steps), null = 'F_exp', estimated = FALSE)
+```
+
+##### Pareto
+```{r echo=FALSE}
+set.seed(42)
+cvm.test(pull(haulout_data, steps), null = 'F_pareto', estimated = FALSE)
+```
+
+##### Truncated pareto
+```{r echo=FALSE}
+set.seed(42)
+cvm.test(pull(haulout_data, steps), null = 'F_pareto_trunc', estimated = FALSE)
+```
+
+The underlying probability measure generating the haulout data is assumed to not be any of the ones considered.
+
+# Generalized Pareto
+
+Just an additional test if maybe the whole dataset can be fitted to some flexible heavy tailed distribution. Based on the assumption that the GPD can be used to model a variety of heavy tailed distributions.
+
+
+```{r echo=FALSE}
+x <- data %>% pull(steps)
+n <- length(x)
+Likelihood_GPD <- function(theta){
+  return(- n - sum(log(1 - theta * x)) - n * log(- (1 / (n * theta)) * sum(log(1 - theta * x))))
+}
+
+theta_max <- optimize(Likelihood_GPD, interval = c(0.0000001,1 / x %>% max()), maximum = TRUE)$maximum
+theta_max
+```
+
+
+
+```{r echo=FALSE}
+k <- - 1 / n * sum(log(1 - theta_max * x))
+a <- k / theta_max
+print(c(k,a))
+```
+
+
+
+
+```{r echo=FALSE}
+Z <- pgpd(x, loc = 0, scale = 2.021474e+03, shape = - 8.306624e-02)
+Z <- sort(Z)
+W2 <- function(x){
+  n <- length(x)
+  result <- sum((x - (seq(1, 2 * n - 1, 2) / (2 * n))) ** 2)
+  return(result + 1 / (12 * n))
+}
+W2(Z)
+```
+
+Conclude that the data does not fit a generalized pareto distribution.
+
+
+
+
+
+
+
