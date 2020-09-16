@@ -27,7 +27,7 @@ data <- mutate(data, lon_minus  = lag(lon), lat_minus = lag(lat)) %>%
 data <- filter(data, V_MASK == 0 & steps > 0 & is.na(steps) == FALSE)
 
 # Set truncation point
-truncation = 400
+truncation = 800
 
 
 summary(data)
@@ -158,10 +158,11 @@ cvm.test(pull(data, steps), null = 'F_pareto_trunc', xmin = xmin, xmax = xmax, a
 
 
 ## Tail data
-Last 400 values 
+# steps larger than truncation
 
-truncated_data <- slice(arrange(data, desc(steps)), c(1:truncation))
-non_truncated_data <- slice(arrange(data, desc(steps)), c(truncation + 1:length(data$steps)))
+
+truncated_data <- data %>% filter(steps > truncation)
+non_truncated_data <- data %>% filter(steps <= truncation)
 
 ### Histogram of data that is taken out(small values)
 ggplot(non_truncated_data) + geom_histogram(aes(x = steps), binwidth = 100) + theme_bw() + ggtitle("Histogram of step length") + xlab("Step Length") + ylab("Frequency")
